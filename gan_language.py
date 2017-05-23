@@ -12,15 +12,18 @@ import tflib.ops.linear
 import tflib.ops.conv1d
 import tflib.plot
 
-# Download Google Billion Word at http://www.statmt.org/lm-benchmark/ and
-# fill in the path to the extracted files here!
-DATA_DIR = ''
-if len(DATA_DIR) == 0:
-    raise Exception('Please specify path to data directory in gan_language.py!')
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('input_text')
+args = parser.parse_args()
+
+#=============================================================================
 
 BATCH_SIZE = 64 # Batch size
 ITERS = 200000 # How many iterations to train for
-SEQ_LEN = 32 # Sequence length in characters
+#SEQ_LEN = 32 # Sequence length in characters
+SEQ_LEN = 44 # Sequence length in characters
 DIM = 512 # Model dimensionality. This is fairly slow and overfits, even on
           # Billion Word. Consider decreasing for smaller datasets.
 CRITIC_ITERS = 10 # How many critic iterations per generator iteration. We
@@ -36,7 +39,7 @@ lib.print_model_settings(locals().copy())
 lines, charmap, inv_charmap = language_helpers.load_dataset(
     max_length=SEQ_LEN,
     max_n_examples=MAX_N_EXAMPLES,
-    data_dir=DATA_DIR
+    data_file=args.input_text
 )
 
 def softmax(logits):
@@ -73,7 +76,7 @@ def Generator(n_samples, prev_outputs=None):
     return output
 
 def Discriminator(inputs):
-    output = tf.transpose(inputs, [0,2,1])
+    output = tf.transpose(inputs, [0, 2, 1])
     output = lib.ops.conv1d.Conv1D('Discriminator.Input', len(charmap), DIM, 1, output)
     output = ResBlock('Discriminator.1', output)
     output = ResBlock('Discriminator.2', output)
@@ -89,7 +92,7 @@ real_inputs = tf.one_hot(real_inputs_discrete, len(charmap))
 fake_inputs = Generator(BATCH_SIZE)
 fake_inputs_discrete = tf.argmax(fake_inputs, fake_inputs.get_shape().ndims-1)
 
-disc_real = Discriminator(real_inputs) 
+disc_real = Discriminator(real_inputs)
 disc_fake = Discriminator(fake_inputs)
 
 disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
@@ -97,60 +100,73 @@ gen_cost = -tf.reduce_mean(disc_fake)
 
 # WGAN lipschitz-penalty
 alpha = tf.random_uniform(
-    shape=[BATCH_SIZE,1,1], 
+    shape=[BATCH_SIZE, 1, 1],
     minval=0.,
     maxval=1.
 )
 differences = fake_inputs - real_inputs
 interpolates = real_inputs + (alpha*differences)
 gradients = tf.gradients(Discriminator(interpolates), [interpolates])[0]
-slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
+slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1, 2]))
 gradient_penalty = tf.reduce_mean((slopes-1.)**2)
 disc_cost += LAMBDA*gradient_penalty
 
 gen_params = lib.params_with_name('Generator')
 disc_params = lib.params_with_name('Discriminator')
 
-gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(gen_cost, var_list=gen_params)
-disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost, var_list=disc_params)
+gen_train_op = tf.train.AdamOptimizer(
+    learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(
+        gen_cost, var_list=gen_params)
+disc_train_op = tf.train.AdamOptimizer(
+    learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(
+        disc_cost, var_list=disc_params)
 
 # Dataset iterator
 def inf_train_gen():
     while True:
         np.random.shuffle(lines)
-        for i in xrange(0, len(lines)-BATCH_SIZE+1, BATCH_SIZE):
+        for i in range(0, len(lines)-BATCH_SIZE+1, BATCH_SIZE):
             yield np.array(
-                [[charmap[c] for c in l] for l in lines[i:i+BATCH_SIZE]], 
+                [[charmap[c] for c in l] for l in lines[i:i+BATCH_SIZE]],
                 dtype='int32'
             )
 
 # During training we monitor JS divergence between the true & generated ngram
 # distributions for n=1,2,3,4. To get an idea of the optimal values, we
 # evaluate these statistics on a held-out set first.
-true_char_ngram_lms = [language_helpers.NgramLanguageModel(i+1, lines[10*BATCH_SIZE:], tokenize=False) for i in xrange(4)]
-validation_char_ngram_lms = [language_helpers.NgramLanguageModel(i+1, lines[:10*BATCH_SIZE], tokenize=False) for i in xrange(4)]
-for i in xrange(4):
-    print "validation set JSD for n={}: {}".format(i+1, true_char_ngram_lms[i].js_with(validation_char_ngram_lms[i]))
-true_char_ngram_lms = [language_helpers.NgramLanguageModel(i+1, lines, tokenize=False) for i in xrange(4)]
+true_char_ngram_lms = [
+    language_helpers.NgramLanguageModel(
+        i+1, lines[10*BATCH_SIZE:], tokenize=False) for i in range(4)]
+validation_char_ngram_lms = [
+    language_helpers.NgramLanguageModel(
+        i+1, lines[:10*BATCH_SIZE], tokenize=False) for i in range(4)]
+
+for i in range(4):
+    print("validation set JSD for n={}: {}".format(
+        i+1, true_char_ngram_lms[i].js_with(validation_char_ngram_lms[i])))
+true_char_ngram_lms = [
+    language_helpers.NgramLanguageModel(
+        i+1, lines, tokenize=False) for i in range(4)]
 
 with tf.Session() as session:
 
     session.run(tf.initialize_all_variables())
+    #session.run(tf.global_variables_initializer()
 
     def generate_samples():
         samples = session.run(fake_inputs)
         samples = np.argmax(samples, axis=2)
         decoded_samples = []
-        for i in xrange(len(samples)):
+        for i in range(len(samples)):
             decoded = []
-            for j in xrange(len(samples[i])):
+            for j in range(len(samples[i])):
                 decoded.append(inv_charmap[samples[i][j]])
             decoded_samples.append(tuple(decoded))
         return decoded_samples
 
     gen = inf_train_gen()
 
-    for iteration in xrange(ITERS):
+    for iteration in range(ITERS):
         start_time = time.time()
 
         # Train generator
@@ -158,8 +174,9 @@ with tf.Session() as session:
             _ = session.run(gen_train_op)
 
         # Train critic
-        for i in xrange(CRITIC_ITERS):
-            _data = gen.next()
+        for i in range(CRITIC_ITERS):
+            #_data = gen.next()
+            _data = next(gen)
             _disc_cost, _ = session.run(
                 [disc_cost, disc_train_op],
                 feed_dict={real_inputs_discrete:_data}
@@ -170,10 +187,10 @@ with tf.Session() as session:
 
         if iteration % 100 == 99:
             samples = []
-            for i in xrange(10):
+            for i in range(10):
                 samples.extend(generate_samples())
 
-            for i in xrange(4):
+            for i in range(4):
                 lm = language_helpers.NgramLanguageModel(i+1, samples, tokenize=False)
                 lib.plot.plot('js{}'.format(i+1), lm.js_with(true_char_ngram_lms[i]))
 
@@ -184,5 +201,5 @@ with tf.Session() as session:
 
         if iteration % 100 == 99:
             lib.plot.flush()
-        
+
         lib.plot.tick()
